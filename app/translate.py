@@ -104,15 +104,20 @@ async def get_optimal_concurrency():
         return 20
 
 async def load_existing_translations():
-    """Загружает уже переведенные товары в отдельном потоке, чтобы не блокировать выполнение."""
+    """Загружает уже переведенные товары, чтобы не дублировать работу."""
     if not os.path.exists(OUTPUT_CSV):
         return set()
 
     try:
-        df_translated = await asyncio.to_thread(pd.read_csv, OUTPUT_CSV, delimiter=",", quotechar='"', on_bad_lines="skip", dtype={"id": str})
-        translated_ids = set(df_translated["id"].astype(str))
-        logger.info(f" Найдено {len(translated_ids)} уже переведенных товаров.")
-        return translated_ids
+        # Читаем CSV в отдельном потоке, чтобы не блокировать основной
+        df_translated = await asyncio.to_thread(pd.read_csv, OUTPUT_CSV, delimiter=",", quotechar='"', on_bad_lines="skip")
+
+        # Проверяем, есть ли нужная колонка
+        if "id" not in df_translated.columns:
+            logger.warning("⚠ В CSV отсутствует колонка 'id'. Возможно, файл поврежден.")
+            return set()
+
+        return set(df_translated["id"].astype(str))
     except Exception as e:
         logger.error(f" Ошибка загрузки переведенных данных: {e}")
         return set()
