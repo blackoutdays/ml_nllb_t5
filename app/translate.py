@@ -28,7 +28,7 @@ else:
     logger.warning("GPU недоступен, используем CPU.")
 
 logger.info("Загружаем модель...")
-MODEL_PATH = "/home/aruzhan/models/t5_translate_en_ru_zh_large_1024"
+MODEL_PATH = "/models/t5_translate_model"
 tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH)
 logger.info("Модель загружена!")
