@@ -2,9 +2,17 @@ services:
   translator:
     build: .
     container_name: translator_service
+    runtime: nvidia
     ports:
       - "8000:8000"
     volumes:
       - /home/aruzhan/models/t5_translate_en_ru_zh_large_1024:/models/t5_translate_model
       - /home/aruzhan:/home/aruzhan
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
     restart: always

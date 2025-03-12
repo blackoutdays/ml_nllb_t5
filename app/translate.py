@@ -7,7 +7,6 @@ import aiofiles
 import asyncio
 import pandas as pd
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,23 +28,20 @@ else:
 logger.info("Загружаем модель...")
 MODEL_PATH = "/models/t5_translate_model"
 tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)  # Перенос модели на GPU
 logger.info("Модель загружена!")
-
-NUM_THREADS = 40
-logger.info(f"Количество потоков: {NUM_THREADS}")
 
 async def write_to_csv(row):
     """Асинхронно записывает ОДНУ строку в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
         await f.write(",".join(map(str, row)) + "\n")
 
-
 def translate_batch(texts):
     if not texts:
         return []
 
-    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256)
+    inputs = {key: value.to(device) for key, value in inputs.items()}  # Перенос данных на GPU
 
     with torch.no_grad():
         outputs = model.generate(
@@ -60,7 +56,6 @@ def translate_batch(texts):
 
     return [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
 
-
 async def process_batch(rows):
     start_time = time.time()
     texts = [row['en'] for _, row in rows.iterrows()]
@@ -68,9 +63,8 @@ async def process_batch(rows):
 
     for i, row in rows.iterrows():
         translated_text = translations[i]
-        logger.info(f"Переведено ID {row['id']}: {translated_text} (⏳ {time.time() - start_time:.2f} сек)")
+        logger.info(f"Переведено ID {row['id']}: {translated_text} ( {time.time() - start_time:.2f} сек)")
         await write_to_csv([row['id'], row['en'], translated_text, row['product_id'], row['category_id']])
-
 
 def parse_json_safe(x):
     try:
@@ -78,8 +72,6 @@ def parse_json_safe(x):
     except json.JSONDecodeError as e:
         logger.error(f"Ошибка JSON: {e} для строки: {x}")
         return {}
-
-NUM_THREADS = 40
 
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
@@ -108,10 +100,9 @@ async def process_csv():
     batch_size = 100
     batches = [df.iloc[i:i + batch_size] for i in range(0, len(df), batch_size)]
 
-    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        loop = asyncio.get_running_loop()
-        for batch in batches:
-            await loop.run_in_executor(executor, process_batch, batch)
+    # Вместо ThreadPoolExecutor → асинхронный вызов
+    tasks = [process_batch(batch) for batch in batches]
+    await asyncio.gather(*tasks)
 
     logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
