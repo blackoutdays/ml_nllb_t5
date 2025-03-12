@@ -60,18 +60,42 @@ def translate_batch(texts):
     logger.info(f"Переведено {len(translations)} текстов.")
     return translations
 
-async def process_batch(rows):
+async def process_batch(rows, translated_ids):
+    """Обрабатывает батч переводов, пропуская уже переведенные товары."""
     start_time = time.time()
-    texts = [row['en'] for _, row in rows.iterrows()]
+    rows_to_translate = rows[~rows["id"].astype(str).isin(translated_ids)]
+
+    if rows_to_translate.empty:
+        logger.info("Все строки в этом батче уже переведены, пропускаем.")
+        return
+
+    texts = rows_to_translate["en"].tolist()
     translations = translate_batch(texts)
 
-    for i, row in rows.iterrows():
+    for i, (_, row) in enumerate(rows_to_translate.iterrows()):
         translated_text = translations[i]
-        logger.info(f"Переведено ID {row['id']}: {translated_text} (⏳ {time.time() - start_time:.2f} сек)")
+        logger.info(f" Переведено ID {row['id']}: {translated_text} ( {time.time() - start_time:.2f} сек)")
         await write_to_csv([row['id'], row['en'], translated_text, row['product_id'], row['category_id']])
 
     elapsed_time = time.time() - start_time
-    logger.info(f"Переведено {len(rows)} строк за {elapsed_time:.2f} секунд. Средняя скорость: {elapsed_time / len(rows):.2f} сек/строка")
+    logger.info(f"Обработано {len(rows_to_translate)} строк за {elapsed_time:.2f} секунд.")
+
+async def load_existing_translations():
+    """Загружает уже переведенные товары, чтобы не дублировать работу."""
+    if not os.path.exists(OUTPUT_CSV):
+        return set()
+
+    try:
+        async with aiofiles.open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
+            lines = await f.readlines()
+        if len(lines) < 2:
+            return set()  # Заголовок есть, но данных нет
+
+        df_translated = pd.read_csv(OUTPUT_CSV, delimiter=",", quotechar='"', skiprows=1)
+        return set(df_translated["id"].astype(str))
+    except Exception as e:
+        logger.error(f" Ошибка загрузки переведенных данных: {e}")
+        return set()
 
 def parse_json_safe(x):
     try:
@@ -109,7 +133,11 @@ async def process_csv():
 
     logger.info(f"Всего {len(batches)} батчей для перевода.")
 
-    tasks = [process_batch(batch) for batch in batches]
+    translated_ids = await load_existing_translations()  # Загружаем уже переведенные ID
+    logger.info(f" Найдено {len(translated_ids)} уже переведенных товаров.")
+
+    tasks = [process_batch(batch, translated_ids) for batch in batches]  # Передаём translated_ids!
+
     await asyncio.gather(*tasks)
 
     logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
