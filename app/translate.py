@@ -44,7 +44,7 @@ def get_dynamic_threads():
             return 10  # Если GPU нет, используем минимальный лимит
 
         load = gpus[0].load  # Загруженность GPU (0.0 - 1.0)
-        logger.info(f"🎛 Загруженность GPU: {load * 100:.2f}%")
+        logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
         if load > 0.8:
             return 10  # Если GPU сильно загружен, уменьшаем до 10 потоков
@@ -56,10 +56,10 @@ def get_dynamic_threads():
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)  # Контролируем количество активных задач
 
-async def write_to_csv(rows):
-    """Асинхронно записывает несколько строк в CSV."""
+async def write_to_csv(row):
+    """Асинхронно записывает одну строку в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
-        await f.writelines([",".join(map(str, row)) + "\n" for row in rows])
+        await f.write(",".join(map(str, row)) + "\n")
 
 def parse_json_safe(x):
     """Безопасный разбор JSON."""
@@ -76,6 +76,9 @@ def translate_text(text):
 
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
 
+    input_text = f"translate eng to rus: {text}"
+    inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
+
     with torch.no_grad():
         output = model.generate(
             **inputs,
@@ -83,14 +86,11 @@ def translate_text(text):
             no_repeat_ngram_size=3,
             repetition_penalty=1.2,
             length_penalty=1.1,
-            num_beams=5,
+            num_beams=7,
             early_stopping=True,
         )
 
-    translated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-
-    logger.info(f" Переведено: \"{text}\" → \"{translated_text}\"")
-    return translated_text
+    return tokenizer.decode(output[0], skip_special_tokens=True)
 
 async def translate_batch(batch):
     """Асинхронно переводит БАТЧ из 150 товаров."""
@@ -103,18 +103,16 @@ async def translate_batch(batch):
     return translations
 
 async def process_batch(batch):
-    """Обрабатывает один батч товаров: переводит и записывает в CSV с логами перевода."""
+    """Обрабатывает один батч товаров: переводит и сразу записывает в CSV с логами перевода."""
     async with semaphore:  # Ограничиваем число активных задач
         start_time = time.time()
         translations = await translate_batch(batch)
 
-        csv_rows = []
         for i, (_, row) in enumerate(batch.iterrows()):
             translated_text = translations[i]
             logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")  # Лог перевода
-            csv_rows.append([row["id"], row["en"], translated_text, row["product_id"], row["category_id"]])
-
-        await write_to_csv(csv_rows)
+            csv_row = [row["id"], row["en"], translated_text, row["product_id"], row["category_id"]]
+            await write_to_csv(csv_row)  # Записываем сразу после перевода
 
         elapsed_time = time.time() - start_time
         logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
@@ -122,7 +120,7 @@ async def process_batch(batch):
 async def process_csv():
     """Обрабатывает CSV, распределяя батчи на 10-20 потоков в зависимости от загрузки GPU."""
     if not os.path.exists(INPUT_CSV):
-        raise FileNotFoundError(f"⚠ Файл не найден: {INPUT_CSV}")
+        raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
     try:
         df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
