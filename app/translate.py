@@ -129,6 +129,3 @@ async def process_csv():
 
     logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
-
-# Запуск
-asyncio.run(process_csv())
