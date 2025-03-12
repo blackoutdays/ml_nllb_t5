@@ -6,8 +6,11 @@ import logging
 import aiofiles
 import asyncio
 import pandas as pd
+import tracemalloc
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 import GPUtil
+
+tracemalloc.start()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,24 +32,13 @@ else:
 logger.info("Загружаем модель...")
 MODEL_PATH = "/models/t5_translate_model"
 tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)  # Перенос модели на GPU
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
-
 
 async def write_to_csv(rows):
     """Асинхронно записывает несколько строк в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
         await f.writelines([",".join(map(str, row)) + "\n" for row in rows])
-
-
-def parse_json_safe(x):
-    """Безопасный разбор JSON с логированием ошибок."""
-    try:
-        return json.loads(x) if isinstance(x, str) and x.startswith("{") else {}
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка JSON: {e} в строке: {x}")
-        return {}
-
 
 async def translate_batch(texts):
     """Перевод батча текстов с обработкой ошибок."""
@@ -56,35 +48,31 @@ async def translate_batch(texts):
 
     logger.info(f"Отправка {len(texts)} текстов в модель...")
 
-    try:
-        async def generate():
-            inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_length=256,
-                    no_repeat_ngram_size=3,
-                    repetition_penalty=1.2,
-                    length_penalty=1.1,
-                    num_beams=7,
-                    early_stopping=True,
-                )
-            return [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+    async def generate():
+        inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_length=256,
+                no_repeat_ngram_size=3,
+                repetition_penalty=1.2,
+                length_penalty=1.1,
+                num_beams=7,
+                early_stopping=True,
+            )
+        return [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
 
-        translations = await asyncio.to_thread(generate)
-        return translations
+    translations = await asyncio.to_thread(generate)
+    return translations
 
-    except Exception as e:
-        logger.error(f"Ошибка при переводе батча: {e}")
-        return ["" for _ in texts]  # Возвращаем пустые строки, чтобы не ломался порядок
 
 async def process_batch(rows, translated_ids):
-    """Обрабатывает батч переводов с параллельной записью в CSV."""
+    """Обрабатывает батч переводов с логами времени и текста перевода."""
     start_time = time.time()
     rows_to_translate = rows[~rows["id"].astype(str).isin(translated_ids)]
 
     if rows_to_translate.empty:
-        logger.info("Все строки в этом батче уже переведены, пропускаем.")
+        logger.info(" Все строки в этом батче уже переведены, пропускаем.")
         return
 
     texts = rows_to_translate["en"].tolist()
@@ -93,7 +81,8 @@ async def process_batch(rows, translated_ids):
     csv_rows = []
     for i, (_, row) in enumerate(rows_to_translate.iterrows()):
         translated_text = translations[i]
-        logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")  # ✅ Лог перевода
+
+        logger.info(f" Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
 
         csv_rows.append([row["id"], row["en"], translated_text, row["product_id"], row["category_id"]])
 
@@ -102,22 +91,8 @@ async def process_batch(rows, translated_ids):
     elapsed_time = time.time() - start_time
     logger.info(f"Обработано {len(rows_to_translate)} строк за {elapsed_time:.2f} секунд.")
 
-async def load_existing_translations():
-    """Загружает уже переведенные товары в отдельном потоке, чтобы не блокировать выполнение."""
-    if not os.path.exists(OUTPUT_CSV):
-        return set()
-
-    try:
-        df_translated = await asyncio.to_thread(pd.read_csv, OUTPUT_CSV, delimiter=",", quotechar='"',
-                                                on_bad_lines="skip")
-        return set(df_translated["id"].astype(str))
-    except Exception as e:
-        logger.error(f"Ошибка загрузки переведенных данных: {e}")
-        return set()
-
-
 async def get_optimal_concurrency():
-    """Динамически определяет количество асинхронных потоков на основе загрузки GPU."""
+    """Оптимальное количество потоков"""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
@@ -128,49 +103,48 @@ async def get_optimal_concurrency():
     except Exception:
         return 20
 
+async def load_existing_translations():
+    """Загружает уже переведенные товары в отдельном потоке, чтобы не блокировать выполнение."""
+    if not os.path.exists(OUTPUT_CSV):
+        return set()
+
+    try:
+        df_translated = await asyncio.to_thread(pd.read_csv, OUTPUT_CSV, delimiter=",", quotechar='"', on_bad_lines="skip", dtype={"id": str})
+        translated_ids = set(df_translated["id"].astype(str))
+        logger.info(f" Найдено {len(translated_ids)} уже переведенных товаров.")
+        return translated_ids
+    except Exception as e:
+        logger.error(f" Ошибка загрузки переведенных данных: {e}")
+        return set()
 
 async def get_dynamic_batch_size():
-    """Динамически регулирует размер батча в зависимости от загрузки GPU."""
+    """Динамически регулирует размер батча."""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
-            return 200  # Без GPU использовать стандартный размер
+            return 200
 
         load = gpus[0].load
         if load < 0.5:
-            return 500  # Увеличиваем батч, если GPU недогружен
+            return 500
         elif load < 0.8:
-            return 300  # Средняя загрузка, батч чуть больше
-        return 200  # Высокая загрузка, стандартный размер
+            return 300
+        return 200
     except Exception as e:
         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
-        return 200  # По умолчанию
-
+        return 200
 
 async def process_csv():
-    """Обрабатывает CSV с ограничением количества параллельных задач через asyncio.Semaphore."""
+    """Обрабатывает CSV с ограничением количества потоков."""
     if not os.path.exists(INPUT_CSV):
         raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
-    try:
-        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, on_bad_lines="skip", delimiter=";", quotechar='"')
-    except Exception as e:
-        logger.error(f"Ошибка чтения CSV: {e}")
-        return None
-
+    df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, on_bad_lines="skip", delimiter=";", quotechar='"')
     if "names" not in df.columns:
         raise ValueError("CSV не содержит столбца 'names'")
 
-    df["names"] = df["names"].apply(parse_json_safe)
-    df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
-
-    if not os.path.exists(OUTPUT_CSV):
-        async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
-            await f.write("id,en_name,ru_name,product_id,category_id\n")
-
     batch_size = await get_dynamic_batch_size()
     batches = [df.iloc[i:i + batch_size] for i in range(0, len(df), batch_size)]
-
     translated_ids = await load_existing_translations()
     concurrency_limit = await get_optimal_concurrency()
     semaphore = asyncio.Semaphore(concurrency_limit)
@@ -180,6 +154,5 @@ async def process_csv():
             await process_batch(batch, translated_ids)
 
     await asyncio.gather(*(process_limited(batch, i) for i, batch in enumerate(batches)))
-
     logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
