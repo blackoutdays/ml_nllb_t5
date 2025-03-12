@@ -38,10 +38,12 @@ async def write_to_csv(row):
 
 def translate_batch(texts):
     if not texts:
+        logger.warning("Пустой список текстов для перевода!")
         return []
 
-    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256)
-    inputs = {key: value.to(device) for key, value in inputs.items()}  # Перенос данных на GPU
+    logger.info(f"Отправка {len(texts)} текстов в модель...")
+
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
 
     with torch.no_grad():
         outputs = model.generate(
@@ -54,7 +56,9 @@ def translate_batch(texts):
             early_stopping=True,
         )
 
-    return [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+    translations = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+    logger.info(f"Переведено {len(translations)} текстов.")
+    return translations
 
 async def process_batch(rows):
     start_time = time.time()
@@ -63,8 +67,11 @@ async def process_batch(rows):
 
     for i, row in rows.iterrows():
         translated_text = translations[i]
-        logger.info(f"Переведено ID {row['id']}: {translated_text} ( {time.time() - start_time:.2f} сек)")
+        logger.info(f"Переведено ID {row['id']}: {translated_text} (⏳ {time.time() - start_time:.2f} сек)")
         await write_to_csv([row['id'], row['en'], translated_text, row['product_id'], row['category_id']])
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Переведено {len(rows)} строк за {elapsed_time:.2f} секунд. Средняя скорость: {elapsed_time / len(rows):.2f} сек/строка")
 
 def parse_json_safe(x):
     try:
@@ -97,10 +104,11 @@ async def process_csv():
         async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
             await f.write("id,en_name,ru_name,product_id,category_id\n")
 
-    batch_size = 100
+    batch_size = 40
     batches = [df.iloc[i:i + batch_size] for i in range(0, len(df), batch_size)]
 
-    # Вместо ThreadPoolExecutor → асинхронный вызов
+    logger.info(f"Всего {len(batches)} батчей для перевода.")
+
     tasks = [process_batch(batch) for batch in batches]
     await asyncio.gather(*tasks)
 
