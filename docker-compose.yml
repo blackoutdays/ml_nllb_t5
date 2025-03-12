@@ -5,6 +5,5 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./models:/models
+      - ~/models/t5_translate_en_ru_zh_large_1024:/models/t5_translate_model
     restart: always

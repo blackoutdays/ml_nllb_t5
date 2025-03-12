@@ -21,7 +21,6 @@ logger = logging.getLogger()
 # INPUT_CSV = "/Users/aruka/PycharmProjects/NLLP_model/app/data/products.csv"
 # OUTPUT_CSV = "/Users/aruka/PycharmProjects/NLLP_model/app/data/translated_products.csv"
 
-MODEL_PATH = "/share/t5_translate_en_ru_zh_large_1024"
 INPUT_CSV = "/home/aruzhan/products_202503121705.csv"
 OUTPUT_CSV = "/home/aruzhan/translated_products.csv"
 
@@ -33,6 +32,7 @@ else:
     logger.warning("GPU недоступен, используем CPU.")
 
 logger.info("Загружаем модель...")
+MODEL_PATH = "/home/aruzhan/models/t5_translate_en_ru_zh_large_1024"
 model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH).to(device)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 logger.info("Модель загружена!")
