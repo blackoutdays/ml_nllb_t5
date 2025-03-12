@@ -7,7 +7,7 @@ import aiofiles
 import asyncio
 import pandas as pd
 from multiprocessing import cpu_count
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import T5Tokenizer, T5ForConditionalGeneration
 from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(
@@ -28,9 +28,9 @@ else:
     logger.warning("GPU недоступен, используем CPU.")
 
 logger.info("Загружаем модель...")
-MODEL_PATH = "/models/t5_translate_model"
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH).to(device)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+MODEL_PATH = "/home/aruzhan/models/t5_translate_en_ru_zh_large_1024"
+tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH)
 logger.info("Модель загружена!")
 
 NUM_THREADS = cpu_count()
