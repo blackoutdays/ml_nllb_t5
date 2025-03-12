@@ -5,5 +5,5 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ~/models/t5_translate_en_ru_zh_large_1024:/models/t5_translate_model
+      - /home/aruzhan/models/t5_translate_en_ru_zh_large_1024:/models/t5_translate_model
     restart: always
