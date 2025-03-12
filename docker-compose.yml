@@ -1,0 +1,10 @@
+services:
+  translator:
+    build: .
+    container_name: translator_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/models
+    restart: always
