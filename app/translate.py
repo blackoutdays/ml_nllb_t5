@@ -34,24 +34,24 @@ tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
 
-BATCH_SIZE = 150  # Количество товаров в одном батче
+BATCH_SIZE = 60
 
 def get_dynamic_threads():
     """Определяет количество потоков в зависимости от загрузки GPU"""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
-            return 10  # Если GPU нет, используем минимальный лимит
+            return 10
 
         load = gpus[0].load  # Загруженность GPU (0.0 - 1.0)
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
         if load > 0.8:
-            return 10  # Если GPU сильно загружен, уменьшаем до 10 потоков
-        return 20  # Если GPU не загружен, используем 20 потоков
+            return 10
+        return 15
     except Exception as e:
-        logger.warning(f"⚠ Ошибка при определении загрузки GPU: {e}")
-        return 10  # В случае ошибки безопасно ставим 10 потоков
+        logger.warning(f" Ошибка при определении загрузки GPU: {e}")
+        return 10
 
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)  # Контролируем количество активных задач
@@ -93,7 +93,6 @@ def translate_text(text):
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
 async def translate_batch(batch):
-    """Асинхронно переводит БАТЧ из 150 товаров."""
     logger.info(f"Переводим {len(batch)} товаров...")
 
     loop = asyncio.get_running_loop()
@@ -104,7 +103,7 @@ async def translate_batch(batch):
 
 async def process_batch(batch):
     """Обрабатывает один батч товаров: переводит и сразу записывает в CSV с логами перевода."""
-    async with semaphore:  # Ограничиваем число активных задач
+    async with semaphore:
         start_time = time.time()
         translations = await translate_batch(batch)
 
@@ -112,7 +111,10 @@ async def process_batch(batch):
             translated_text = translations[i]
             logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")  # Лог перевода
             csv_row = [row["id"], row["en"], translated_text, row["product_id"], row["category_id"]]
-            await write_to_csv(csv_row)  # Записываем сразу после перевода
+            logger.info(f"Записываю в CSV строку ID {row['id']}: {csv_row}")
+            await write_to_csv(csv_row)
+
+            logger.info(f"Строка ID {row['id']} записана в CSV.")
 
         elapsed_time = time.time() - start_time
         logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
