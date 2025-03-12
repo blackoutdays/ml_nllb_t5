@@ -6,3 +6,4 @@ transformers
 aiofiles
 tiktoken
 protobuf
+blobfile
