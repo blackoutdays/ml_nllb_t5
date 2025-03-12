@@ -34,11 +34,16 @@ logger.info("Модель загружена!")
 
 NUM_THREADS = 30  # 30 потоков
 BATCH_SIZE = 150  # Обрабатываем по 150 товаров в потоке
+MAX_CONCURRENT_BATCHES = 30  # Ограничение на число одновременно выполняемых батчей
+
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_BATCHES)  # Ограничение числа активных потоков
+
 
 async def write_to_csv(rows):
     """Асинхронно записывает несколько строк в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
         await f.writelines([",".join(map(str, row)) + "\n" for row in rows])
+
 
 def parse_json_safe(x):
     """Безопасный разбор JSON."""
@@ -48,8 +53,9 @@ def parse_json_safe(x):
         logger.error(f"Ошибка JSON: {e} в строке: {x}")
         return {}
 
+
 def translate_text(text):
-    """Переводит ОДИН текст (работает в отдельном потоке)."""
+    """Переводит один текст и возвращает результат."""
     if not text or pd.isna(text):
         return ""
 
@@ -66,33 +72,43 @@ def translate_text(text):
             early_stopping=True,
         )
 
-    return tokenizer.decode(output[0], skip_special_tokens=True)
+    translated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+
+    logger.info(f" Перевод: \"{text}\" → \"{translated_text}\"")  # Лог перевода
+
+    return translated_text  # Возвращаем перевод
+
 
 async def translate_batch(batch):
-    """Асинхронно переводит БАТЧ из 150 товаров."""
-    logger.info(f"Переводим {len(batch)} товаров...")
+    """Асинхронно переводит батч товаров."""
+    logger.info(f" Переводим {len(batch)} товаров...")
 
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        translations = await asyncio.gather(*[loop.run_in_executor(executor, translate_text, row["en"]) for _, row in batch.iterrows()])
+        translations = await asyncio.gather(
+            *[loop.run_in_executor(executor, translate_text, row["en"]) for _, row in batch.iterrows()]
+        )
 
     return translations
 
+
 async def process_batch(batch):
-    """Обрабатывает батч товаров: переводит и записывает в CSV."""
-    start_time = time.time()
+    """Обрабатывает один батч товаров: переводит и записывает в CSV."""
+    async with semaphore:  # Ограничиваем число активных задач
+        start_time = time.time()
+        translations = await translate_batch(batch)
 
-    translations = await translate_batch(batch)
+        csv_rows = []
+        for i, (_, row) in enumerate(batch.iterrows()):
+            translated_text = translations[i]
+            logger.info(f" Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
+            csv_rows.append([row["id"], row["en"], translated_text, row["product_id"], row["category_id"]])
 
-    csv_rows = [
-        [row["id"], row["en"], translations[i], row["product_id"], row["category_id"]]
-        for i, (_, row) in enumerate(batch.iterrows())
-    ]
+        await write_to_csv(csv_rows)
 
-    await write_to_csv(csv_rows)
+        elapsed_time = time.time() - start_time
+        logger.info(f" Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
 
-    elapsed_time = time.time() - start_time
-    logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
 
 async def process_csv():
     """Обрабатывает CSV, распределяя батчи на 30 потоков."""
@@ -100,18 +116,19 @@ async def process_csv():
         raise FileNotFoundError(f"⚠ Файл не найден: {INPUT_CSV}")
 
     try:
-        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
+        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip",
+                                     dtype=str)
         logger.info(f" CSV загружен, строк: {len(df)}")
     except Exception as e:
         logger.error(f" Ошибка чтения CSV: {e}")
         return None
 
     if "id" not in df.columns or "names" not in df.columns:
-        logger.error(" CSV не содержит необходимые столбцы 'id' и 'names'.")
+        logger.error("CSV не содержит необходимые столбцы 'id' и 'names'.")
         return None
 
     df.dropna(subset=["id", "names"], inplace=True)
-    logger.info(f" Очищенный CSV: {len(df)} строк после удаления пустых значений.")
+    logger.info(f"Очищенный CSV: {len(df)} строк после удаления пустых значений.")
 
     df["names"] = df["names"].apply(parse_json_safe)
     df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
@@ -121,9 +138,9 @@ async def process_csv():
             await f.write("id,en_name,ru_name,product_id,category_id\n")
 
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
-    logger.info(f" Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
+    logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
     await asyncio.gather(*(process_batch(batch) for batch in batches))
 
-    logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
+    logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
