@@ -78,7 +78,6 @@ async def translate_batch(texts):
         logger.error(f"Ошибка при переводе батча: {e}")
         return ["" for _ in texts]  # Возвращаем пустые строки, чтобы не ломался порядок
 
-
 async def process_batch(rows, translated_ids):
     """Обрабатывает батч переводов с параллельной записью в CSV."""
     start_time = time.time()
@@ -91,16 +90,17 @@ async def process_batch(rows, translated_ids):
     texts = rows_to_translate["en"].tolist()
     translations = await translate_batch(texts)
 
-    csv_rows = [
-        [row["id"], row["en"], translations[i], row["product_id"], row["category_id"]]
-        for i, (_, row) in enumerate(rows_to_translate.iterrows())
-    ]
+    csv_rows = []
+    for i, (_, row) in enumerate(rows_to_translate.iterrows()):
+        translated_text = translations[i]
+        logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")  # ✅ Лог перевода
+
+        csv_rows.append([row["id"], row["en"], translated_text, row["product_id"], row["category_id"]])
 
     await write_to_csv(csv_rows)
 
     elapsed_time = time.time() - start_time
     logger.info(f"Обработано {len(rows_to_translate)} строк за {elapsed_time:.2f} секунд.")
-
 
 async def load_existing_translations():
     """Загружает уже переведенные товары в отдельном потоке, чтобы не блокировать выполнение."""
