@@ -91,7 +91,7 @@ async def load_existing_translations():
         if len(lines) < 2:
             return set()  # Заголовок есть, но данных нет
 
-        df_translated = pd.read_csv(OUTPUT_CSV, delimiter=",", quotechar='"', skiprows=1)
+        df_translated = pd.read_csv(OUTPUT_CSV, delimiter=",", quotechar='"', on_bad_lines="skip")
         return set(df_translated["id"].astype(str))
     except Exception as e:
         logger.error(f" Ошибка загрузки переведенных данных: {e}")
