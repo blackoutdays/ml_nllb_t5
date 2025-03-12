@@ -6,12 +6,8 @@ import logging
 import aiofiles
 import asyncio
 import pandas as pd
-import tracemalloc
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-import GPUtil
 from concurrent.futures import ThreadPoolExecutor
-
-tracemalloc.start()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,7 +45,7 @@ def parse_json_safe(x):
     try:
         return json.loads(x) if isinstance(x, str) and x.startswith("{") else {}
     except json.JSONDecodeError as e:
-        logger.error(f" Ошибка JSON: {e} в строке: {x}")
+        logger.error(f"Ошибка JSON: {e} в строке: {x}")
         return {}
 
 def translate_text(text):
@@ -74,7 +70,7 @@ def translate_text(text):
 
 async def translate_batch(batch):
     """Асинхронно переводит БАТЧ из 150 товаров."""
-    logger.info(f" Переводим {len(batch)} товаров...")
+    logger.info(f"Переводим {len(batch)} товаров...")
 
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
@@ -96,21 +92,26 @@ async def process_batch(batch):
     await write_to_csv(csv_rows)
 
     elapsed_time = time.time() - start_time
-    logger.info(f" Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
+    logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
 
 async def process_csv():
     """Обрабатывает CSV, распределяя батчи на 30 потоков."""
     if not os.path.exists(INPUT_CSV):
-        raise FileNotFoundError(f" Файл не найден: {INPUT_CSV}")
+        raise FileNotFoundError(f"⚠ Файл не найден: {INPUT_CSV}")
 
     try:
-        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, on_bad_lines="skip", delimiter=";", quotechar='"')
+        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
+        logger.info(f" CSV загружен, строк: {len(df)}")
     except Exception as e:
         logger.error(f" Ошибка чтения CSV: {e}")
         return None
 
-    if "names" not in df.columns:
-        raise ValueError("⚠ CSV не содержит столбца 'names'")
+    if "id" not in df.columns or "names" not in df.columns:
+        logger.error(" CSV не содержит необходимые столбцы 'id' и 'names'.")
+        return None
+
+    df.dropna(subset=["id", "names"], inplace=True)
+    logger.info(f" Очищенный CSV: {len(df)} строк после удаления пустых значений.")
 
     df["names"] = df["names"].apply(parse_json_safe)
     df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
@@ -119,12 +120,9 @@ async def process_csv():
         async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
             await f.write("id,en_name,ru_name,product_id,category_id\n")
 
-    # Разбиваем CSV на батчи по 150 товаров
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
-
     logger.info(f" Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
-    # Асинхронная обработка батчей
     await asyncio.gather(*(process_batch(batch) for batch in batches))
 
     logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
