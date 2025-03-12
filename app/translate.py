@@ -7,6 +7,7 @@ import aiofiles
 import asyncio
 import pandas as pd
 from transformers import T5Tokenizer, T5ForConditionalGeneration
+import GPUtil
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,13 +53,14 @@ def translate_batch(texts):
             no_repeat_ngram_size=3,
             repetition_penalty=1.2,
             length_penalty=1.1,
-            num_beams=5,
+            num_beams=7,
             early_stopping=True,
         )
 
     translations = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
     logger.info(f"Переведено {len(translations)} текстов.")
     return translations
+
 
 async def process_batch(rows, translated_ids):
     """Обрабатывает батч переводов, пропуская уже переведенные товары."""
@@ -89,7 +91,7 @@ async def load_existing_translations():
         async with aiofiles.open(OUTPUT_CSV, mode="r", encoding="utf-8") as f:
             lines = await f.readlines()
         if len(lines) < 2:
-            return set()  # Заголовок есть, но данных нет
+            return set()
 
         df_translated = pd.read_csv(OUTPUT_CSV, delimiter=",", quotechar='"', on_bad_lines="skip")
         return set(df_translated["id"].astype(str))
@@ -104,20 +106,45 @@ def parse_json_safe(x):
         logger.error(f"Ошибка JSON: {e} для строки: {x}")
         return {}
 
+
+MIN_CONCURRENCY = 20
+MAX_CONCURRENCY = 40
+batch_size = 200
+
+async def get_optimal_concurrency():
+    """Динамически определяет оптимальное число потоков в зависимости от загрузки GPU."""
+    try:
+        gpus = GPUtil.getGPUs()
+        if not gpus:
+            logger.info("Не удалось получить данные о загрузке GPU, используем минимальный лимит потоков.")
+            return MIN_CONCURRENCY  # Если нет данных о GPU, ставим минимум
+
+        load = gpus[0].load  # Загруженность GPU (0.0 - 1.0)
+        logger.info(f"🎛 Загруженность GPU: {load * 100:.2f}%")
+        if load > 0.9:
+            return MIN_CONCURRENCY  # Сильно загружен → минимальный лимит
+        elif load < 0.5:
+            return MAX_CONCURRENCY  # GPU недогружен → максимальный лимит
+        else:
+            return int((MAX_CONCURRENCY - MIN_CONCURRENCY) * (1 - load) + MIN_CONCURRENCY)
+    except Exception as e:
+        logger.warning(f"⚠ Ошибка при получении загрузки GPU: {e}")
+        return MIN_CONCURRENCY
+
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
-        raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
+        raise FileNotFoundError(f" Файл не найден: {INPUT_CSV}")
 
     try:
         df = pd.read_csv(INPUT_CSV, on_bad_lines="skip", delimiter=";", quotechar='"')
     except Exception as e:
-        logger.error(f"Ошибка чтения CSV: {e}")
+        logger.error(f" Ошибка чтения CSV: {e}")
         return None
 
-    logger.info(f"Колонки CSV: {df.columns}")
+    logger.info(f" Колонки CSV: {df.columns}")
 
     if "names" not in df.columns:
-        raise ValueError("CSV не содержит столбца 'names'")
+        raise ValueError(" CSV не содержит столбца 'names'")
 
     df["names"] = df["names"].apply(parse_json_safe)
     df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
@@ -128,16 +155,24 @@ async def process_csv():
         async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
             await f.write("id,en_name,ru_name,product_id,category_id\n")
 
-    batch_size = 40
     batches = [df.iloc[i:i + batch_size] for i in range(0, len(df), batch_size)]
 
     logger.info(f"Всего {len(batches)} батчей для перевода.")
 
-    translated_ids = await load_existing_translations()  # Загружаем уже переведенные ID
+    translated_ids = await load_existing_translations()
     logger.info(f" Найдено {len(translated_ids)} уже переведенных товаров.")
 
-    tasks = [process_batch(batch, translated_ids) for batch in batches]  # Передаём translated_ids!
+    concurrency_limit = await get_optimal_concurrency()
+    logger.info(f"Оптимальное количество потоков: {concurrency_limit}")
 
+    semaphore = asyncio.Semaphore(concurrency_limit)
+
+    async def process_limited(batch, batch_index):
+        async with semaphore:
+            logger.info(f"Обрабатываем батч {batch_index+1}/{len(batches)} ({len(batch)} строк)")
+            await process_batch(batch, translated_ids)
+
+    tasks = [process_limited(batch, i) for i, batch in enumerate(batches)]
     await asyncio.gather(*tasks)
 
     logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")

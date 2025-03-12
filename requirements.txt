@@ -8,3 +8,4 @@ tiktoken
 protobuf
 blobfile
 sentencepiece
+gputil
