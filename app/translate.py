@@ -119,7 +119,7 @@ async def translate_text_with_semaphore(text, semaphore):
     async with semaphore:
         return await asyncio.to_thread(translate_text, text)
 
-async def process_batch(batch, existing_ids):
+async def process_batch(batch, existing_ids, semaphore):  # добавляем semaphore в аргументы функции
     start_time = time.time()
 
     rows_to_translate = []
@@ -133,7 +133,11 @@ async def process_batch(batch, existing_ids):
             rows_to_translate.append(row)
 
     if rows_to_translate:
-        translations = await translate_batch(pd.DataFrame(rows_to_translate))
+        try:
+            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)  # передаем semaphore
+        except Exception as e:
+            logger.error(f"Ошибка при переводе: {e}")
+            return
 
         rows_to_write = []
         for i, row in enumerate(rows_to_translate):
@@ -189,7 +193,7 @@ async def process_csv():
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
     logger.info(f" Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
-    await asyncio.gather(*(process_batch(batch, existing_ids) for batch in batches))
+    await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))  # передаем semaphore
 
     logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
