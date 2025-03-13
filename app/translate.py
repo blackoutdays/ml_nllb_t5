@@ -32,24 +32,27 @@ else:
 logger.info("Загружаем модель...")
 MODEL_PATH = "/models/t5_translate_model"
 tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device).half()
+# model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
 
 def adjust_batch_size():
     gpus = GPUtil.getGPUs()
     if not gpus:
-        return 25
+        return 128
 
     load = gpus[0].load
     logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
-    if load > 0.8:
-        return 15
-    return 50
+    if load > 0.9:
+        return 32
+    return 128
+
 
 BATCH_SIZE = adjust_batch_size()
 
 def get_dynamic_threads():
+    """Динамическая настройка количества потоков в зависимости от загрузки GPU"""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
@@ -59,18 +62,39 @@ def get_dynamic_threads():
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
         if load > 0.8:
-            return 10
+            return 20
         return 50
+
     except Exception as e:
         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
         return 10
 
-NUM_THREADS = get_dynamic_threads()
-semaphore = asyncio.Semaphore(NUM_THREADS)
+# def get_dynamic_threads():
+#     try:
+#         gpus = GPUtil.getGPUs()
+#         if not gpus:
+#             return 10
+#
+#         load = gpus[0].load
+#         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
+#
+#         if load > 0.8:
+#             return 10
+#         return 50
+#     except Exception as e:
+#         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
+#         return 10
 
-async def write_to_csv(row):
+# NUM_THREADS = get_dynamic_threads()
+# semaphore = asyncio.Semaphore(NUM_THREADS)
+
+async def write_to_csv(rows):
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
-        await f.write(",".join(map(str, row)) + "\n")
+        await f.write("\n".join([",".join(map(str, row)) for row in rows]) + "\n")
+
+# async def write_to_csv(row):
+#     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
+#         await f.write(",".join(map(str, row)) + "\n")
 
 def parse_json_safe(x):
     try:
@@ -105,13 +129,21 @@ async def translate_batch(batch):
     logger.info(f"Переводим {len(batch)} товаров...")
 
     loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        translations = await asyncio.gather(*[loop.run_in_executor(executor, translate_text, row["en"]) for _, row in batch.iterrows()])
+    translations = await asyncio.gather(*[loop.run_in_executor(None, translate_text, row["en"]) for _, row in batch.iterrows()])
 
     return translations
 
+# async def translate_batch(batch):
+#     logger.info(f"Переводим {len(batch)} товаров...")
+#
+#     loop = asyncio.get_running_loop()
+#     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+#         translations = await asyncio.gather(*[loop.run_in_executor(executor, translate_text, row["en"]) for _, row in batch.iterrows()])
+#
+#     return translations
+
 async def process_batch(batch, existing_ids):
-    async with semaphore:
+    # async with semaphore:
         start_time = time.time()
         translations = await translate_batch(batch)
 
@@ -159,7 +191,7 @@ async def process_csv():
     existing_ids = set()
     if os.path.exists(OUTPUT_CSV):
         try:
-            existing_ids = pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"].tolist()
+            existing_ids = pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"].to_set()
             logger.info(f"Найдено уже переведенных товаров: {len(existing_ids)}")
         except Exception as e:
             logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
