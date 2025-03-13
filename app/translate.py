@@ -66,7 +66,6 @@ def get_dynamic_threads():
         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
         return 10  # Если произошла ошибка, возвращаем 10 потоков по умолчанию
 
-# Устанавливаем семафор для ограничения параллельных потоков
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)
 
@@ -103,14 +102,22 @@ def translate_text(text):
 
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
-async def translate_batch(batch):
+async def translate_batch(batch, semaphore):
     logger.info(f"Переводим {len(batch)} товаров...")
 
     loop = asyncio.get_running_loop()
-    translations = await asyncio.gather(*[loop.run_in_executor(None, translate_text, row["en"]) for _, row in batch.iterrows()])
+    tasks = []
+
+    for _, row in batch.iterrows():
+        tasks.append(loop.create_task(translate_text_with_semaphore(row["en"], semaphore)))
+
+    translations = await asyncio.gather(*tasks)
 
     return translations
 
+async def translate_text_with_semaphore(text, semaphore):
+    async with semaphore:
+        return await asyncio.to_thread(translate_text, text)
 
 async def process_batch(batch, existing_ids):
     start_time = time.time()
