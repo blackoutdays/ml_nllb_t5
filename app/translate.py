@@ -4,6 +4,7 @@ import torch
 import json
 import logging
 import aiofiles
+import gc
 import asyncio
 import pandas as pd
 from transformers import T5Tokenizer, T5ForConditionalGeneration
@@ -118,6 +119,10 @@ async def process_batch(batch):
 
         elapsed_time = time.time() - start_time
         logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
+
+        del batch
+        gc.collect()
+        torch.cuda.empty_cache()
 
 async def process_csv():
     """Обрабатывает CSV, распределяя батчи на 10-20 потоков в зависимости от загрузки GPU."""
