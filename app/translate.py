@@ -134,7 +134,7 @@ async def process_batch(batch, existing_ids, semaphore):  # добавляем s
 
     if rows_to_translate:
         try:
-            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)  # передаем semaphore
+            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)
         except Exception as e:
             logger.error(f"Ошибка при переводе: {e}")
             return
