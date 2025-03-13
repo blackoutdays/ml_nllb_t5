@@ -32,10 +32,10 @@ else:
 logger.info("Загружаем модель...")
 MODEL_PATH = "/models/t5_translate_model"
 tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
-model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device).half()
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
 
-BATCH_SIZE = 90
+BATCH_SIZE = 65
 
 def get_dynamic_threads():
     """Определяет количество потоков в зависимости от загрузки GPU"""
@@ -103,8 +103,8 @@ async def translate_batch(batch):
     return translations
 
 async def process_batch(batch):
-    """Обрабатывает один батч товаров: переводит и сразу записывает в CSV с логами перевода."""
     async with semaphore:
+        torch.cuda.empty_cache()
         start_time = time.time()
         translations = await translate_batch(batch)
 
