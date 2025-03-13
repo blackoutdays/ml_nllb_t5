@@ -156,11 +156,12 @@ async def process_batch(batch, existing_ids, semaphore):
     del batch
     gc.collect()
     torch.cuda.empty_cache()
+
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
         raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
-    # Загружаем переведённые товары
+    # Загружаем переведенные ID
     existing_ids = set()
     if os.path.exists(OUTPUT_CSV):
         try:
@@ -169,6 +170,7 @@ async def process_csv():
         except Exception as e:
             logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
 
+    # Загружаем INPUT_CSV
     try:
         df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
         logger.info(f"CSV загружен, строк: {len(df)}")
@@ -176,31 +178,29 @@ async def process_csv():
         logger.error(f"Ошибка чтения CSV: {e}")
         return None
 
+    # Проверяем наличие нужных столбцов
     if "id" not in df.columns or "names" not in df.columns:
         logger.error("CSV не содержит необходимые столбцы 'id' и 'names'.")
         return None
 
+    # Очищаем пустые строки
     df.dropna(subset=["id", "names"], inplace=True)
-    logger.info(f"Очищенный CSV: {len(df)} строк после удаления пустых значений.")
+    df["id"] = df["id"].astype(str)  # Приводим ID к строке
 
-    # Приводим ID к строкам, чтобы избежать проблем с типами данных
-    df["id"] = df["id"].astype(str)
-    existing_ids = set(map(str, existing_ids))
-
-    # Убираем уже переведённые товары
+    # Фильтруем уже переведенные товары
     df = df[~df["id"].isin(existing_ids)]
     logger.info(f"Оставшиеся товары для перевода после фильтрации: {len(df)}")
 
-    # Если нет товаров для перевода, выходим
+    # Если переведенных нет — завершаем процесс
     if len(df) == 0:
         logger.info("Все товары уже переведены. Завершаем работу.")
         return OUTPUT_CSV
 
-    # Подготавливаем тексты для перевода
-    df["names"] = df["names"].apply(parse_json_safe)
-    df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
+    # Обрабатываем JSON-данные в "names"
+    df.loc[:, "names"] = df["names"].apply(parse_json_safe)
+    df.loc[:, "en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
 
-    # Батчим только новые товары
+    # Создаем батчи только для новых товаров
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
     logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
