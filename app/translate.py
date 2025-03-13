@@ -24,7 +24,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if torch.cuda.is_available():
     logger.info(f"Используется GPU: {torch.cuda.get_device_name(0)}")
-    torch.cuda.empty_cache()  # Очистка памяти перед запуском
+    torch.cuda.empty_cache()
 else:
     logger.warning("GPU недоступен, используем CPU.")
 
@@ -34,7 +34,19 @@ tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device).half()
 logger.info("Модель загружена!")
 
-BATCH_SIZE = 140
+def adjust_batch_size():
+    gpus = GPUtil.getGPUs()
+    if not gpus:
+        return 140
+
+    load = gpus[0].load
+    logger.info(f"Загруженность GPU: {load * 100:.2f}%")
+
+    if load > 0.9:
+        return 32
+    return 140
+
+BATCH_SIZE = adjust_batch_size()
 
 def get_dynamic_threads():
     try:
