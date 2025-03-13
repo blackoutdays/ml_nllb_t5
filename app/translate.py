@@ -129,3 +129,47 @@ async def process_batch(batch, existing_ids):
         del batch
         gc.collect()
         torch.cuda.empty_cache()
+
+
+async def process_csv():
+    if not os.path.exists(INPUT_CSV):
+        raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
+
+    try:
+        df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
+        logger.info(f" CSV загружен, строк: {len(df)}")
+    except Exception as e:
+        logger.error(f" Ошибка чтения CSV: {e}")
+        return None
+
+    if "id" not in df.columns or "names" not in df.columns:
+        logger.error(" CSV не содержит необходимые столбцы 'id' и 'names'.")
+        return None
+
+    df.dropna(subset=["id", "names"], inplace=True)
+    logger.info(f" Очищенный CSV: {len(df)} строк после удаления пустых значений.")
+
+    df["names"] = df["names"].apply(parse_json_safe)
+    df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
+
+    existing_ids = set()
+    if os.path.exists(OUTPUT_CSV):
+        try:
+            with open(OUTPUT_CSV, 'r', encoding="utf-8") as f:
+                for line in f:
+                    existing_ids.add(line.split(",")[0])
+            logger.info(f"Найдено уже переведенных товаров: {len(existing_ids)}")
+        except Exception as e:
+            logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
+
+    if not os.path.exists(OUTPUT_CSV):
+        async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
+            await f.write("id,en_name,ru_name,product_id,category_id\n")
+
+    batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
+    logger.info(f" Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
+
+    await asyncio.gather(*(process_batch(batch, existing_ids) for batch in batches))
+
+    logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
+    return OUTPUT_CSV
