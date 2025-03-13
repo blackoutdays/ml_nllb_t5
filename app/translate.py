@@ -35,10 +35,21 @@ tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
 
-BATCH_SIZE = 20
+def adjust_batch_size():
+    gpus = GPUtil.getGPUs()
+    if not gpus:
+        return 25
+
+    load = gpus[0].load
+    logger.info(f"Загруженность GPU: {load * 100:.2f}%")
+
+    if load > 0.8:
+        return 15
+    return 50
+
+BATCH_SIZE = adjust_batch_size()
 
 def get_dynamic_threads():
-    """Определяет количество потоков в зависимости от загрузки GPU"""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
@@ -49,21 +60,19 @@ def get_dynamic_threads():
 
         if load > 0.8:
             return 10
-        return 15
+        return 50
     except Exception as e:
-        logger.warning(f" Ошибка при определении загрузки GPU: {e}")
+        logger.warning(f"Ошибка при определении загрузки GPU: {e}")
         return 10
 
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)
 
 async def write_to_csv(row):
-    """Асинхронно записывает одну строку в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
         await f.write(",".join(map(str, row)) + "\n")
 
 def parse_json_safe(x):
-    """Безопасный разбор JSON."""
     try:
         return json.loads(x) if isinstance(x, str) and x.startswith("{") else {}
     except json.JSONDecodeError as e:
@@ -71,7 +80,6 @@ def parse_json_safe(x):
         return {}
 
 def translate_text(text):
-    """Переводит ОДИН текст (работает в отдельном потоке) и логирует результат."""
     if not text or pd.isna(text):
         return ""
 
@@ -103,7 +111,6 @@ async def translate_batch(batch):
     return translations
 
 async def process_batch(batch, existing_ids):
-    """Обрабатывает один батч товаров: переводит и сразу записывает в CSV с логами перевода."""
     async with semaphore:
         start_time = time.time()
         translations = await translate_batch(batch)
@@ -129,7 +136,6 @@ async def process_batch(batch, existing_ids):
         torch.cuda.empty_cache()
 
 async def process_csv():
-    """Обрабатывает CSV, распределяя батчи на 10-20 потоков в зависимости от загрузки GPU."""
     if not os.path.exists(INPUT_CSV):
         raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
@@ -153,9 +159,7 @@ async def process_csv():
     existing_ids = set()
     if os.path.exists(OUTPUT_CSV):
         try:
-            with open(OUTPUT_CSV, 'r', encoding="utf-8") as f:
-                for line in f:
-                    existing_ids.add(line.split(",")[0])
+            existing_ids = pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"].tolist()
             logger.info(f"Найдено уже переведенных товаров: {len(existing_ids)}")
         except Exception as e:
             logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
