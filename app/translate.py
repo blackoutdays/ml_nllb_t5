@@ -42,17 +42,17 @@ def get_dynamic_threads():
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
-            return 15
+            return 10
 
         load = gpus[0].load  # Загруженность GPU (0.0 - 1.0)
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
         if load > 0.8:
-            return 15
-        return 30
+            return 10
+        return 24
     except Exception as e:
         logger.warning(f" Ошибка при определении загрузки GPU: {e}")
-        return 15
+        return 10
 
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)  # Контролируем количество активных задач
@@ -87,7 +87,7 @@ def translate_text(text):
             no_repeat_ngram_size=3,
             repetition_penalty=1.2,
             length_penalty=1.1,
-            num_beams=7,
+            num_beams=6,
             early_stopping=True,
         )
 
