@@ -49,7 +49,7 @@ def adjust_batch_size():
 BATCH_SIZE = adjust_batch_size()
 
 def get_dynamic_threads():
-    """Динамическая настройка количества потоков в зависимости от загрузки GPU"""
+    """Динамическая настройка количества потоков в зависимости от загрузки GPU, но с максимальным значением 60."""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
@@ -58,9 +58,10 @@ def get_dynamic_threads():
         load = gpus[0].load
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
+        # Максимум 60 потоков, динамически от 10 до 60 в зависимости от загрузки GPU
         if load > 0.8:
-            return 20
-        return 50
+            return min(60, 20)  # если нагрузка на GPU больше 80%, ограничиваем до 20 потоков
+        return min(60, 50)  # в противном случае, но не больше 50 потоков
 
     except Exception as e:
         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
@@ -108,7 +109,6 @@ async def translate_batch(batch, semaphore):
     loop = asyncio.get_running_loop()
     tasks = []
 
-    # Ограничиваем количество параллельных задач через semaphore
     for _, row in batch.iterrows():
         tasks.append(loop.create_task(translate_text_with_semaphore(row["en"], semaphore)))
 
@@ -120,7 +120,7 @@ async def translate_text_with_semaphore(text, semaphore):
     async with semaphore:
         return await asyncio.to_thread(translate_text, text)
 
-async def process_batch(batch, existing_ids, semaphore):  # передаем semaphore в функцию
+async def process_batch(batch, existing_ids, semaphore):  # добавляем semaphore в аргументы функции
     start_time = time.time()
 
     rows_to_translate = []
@@ -135,7 +135,7 @@ async def process_batch(batch, existing_ids, semaphore):  # передаем sem
 
     if rows_to_translate:
         try:
-            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)  # передаем semaphore
+            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)
         except Exception as e:
             logger.error(f"Ошибка при переводе: {e}")
             return
@@ -194,7 +194,7 @@ async def process_csv():
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
     logger.info(f" Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
-    await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))  # передаем semaphore
+    await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))
 
     logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
