@@ -120,7 +120,7 @@ async def translate_text_with_semaphore(text, semaphore):
     async with semaphore:
         return await asyncio.to_thread(translate_text, text)
 
-async def process_batch(batch, existing_ids, semaphore):  # добавляем semaphore в аргументы функции
+async def process_batch(batch, existing_ids, semaphore):
     start_time = time.time()
 
     rows_to_translate = []
