@@ -37,14 +37,14 @@ logger.info("Модель загружена!")
 def adjust_batch_size():
     gpus = GPUtil.getGPUs()
     if not gpus:
-        return 140
+        return 90
 
     load = gpus[0].load
     logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
     if load > 0.9:
         return 32
-    return 140
+    return 90
 
 BATCH_SIZE = adjust_batch_size()
 
@@ -59,7 +59,7 @@ def get_dynamic_threads():
 
         if load > 0.8:
             return 20
-        return 50
+        return 35
     except Exception as e:
         logger.warning(f" Ошибка при определении загрузки GPU: {e}")
         return 20
