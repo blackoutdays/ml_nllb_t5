@@ -37,14 +37,14 @@ logger.info("Модель загружена!")
 def adjust_batch_size():
     gpus = GPUtil.getGPUs()
     if not gpus:
-        return 128
+        return 140
 
     load = gpus[0].load
     logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
     if load > 0.9:
         return 32
-    return 128
+    return 140
 
 BATCH_SIZE = adjust_batch_size()
 
@@ -111,30 +111,40 @@ async def translate_batch(batch):
 
     return translations
 
+
 async def process_batch(batch, existing_ids):
-    async with semaphore:  # Используем семафор для ограничения количества параллельных задач
-        start_time = time.time()
-        translations = await translate_batch(batch)
+    start_time = time.time()
 
-        for i, (_, row) in enumerate(batch.iterrows()):
-            if row["id"] in existing_ids:
-                logger.info(f"Пропускаю товар с ID {row['id']}, он уже переведен.")
-                continue
+    rows_to_translate = []
 
+    for _, row in batch.iterrows():
+        item_id = str(row["id"])
+
+        if item_id in existing_ids:
+            logger.info(f"Пропускаю товар с ID {item_id}, он уже переведен.")
+        else:
+            rows_to_translate.append(row)
+
+    if rows_to_translate:
+        translations = await translate_batch(pd.DataFrame(rows_to_translate))
+
+        rows_to_write = []
+        for i, row in enumerate(rows_to_translate):
             translated_text = translations[i]
             logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
             csv_row = [row["id"], row["en"], translated_text, row["product_id"], row["category_id"]]
-            logger.info(f"Записываю в CSV строку ID {row['id']}: {csv_row}")
-            await write_to_csv(csv_row)
+            rows_to_write.append(csv_row)
+            existing_ids.add(str(row["id"]))
 
-            existing_ids.add(row["id"])
+        if rows_to_write:
+            await write_to_csv(rows_to_write)
 
-        elapsed_time = time.time() - start_time
-        logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
+    elapsed_time = time.time() - start_time
+    logger.info(f"Обработано {len(batch)} строк за {elapsed_time:.2f} сек.")
 
-        del batch
-        gc.collect()
-        torch.cuda.empty_cache()
+    del batch
+    gc.collect()
+    torch.cuda.empty_cache()
 
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
