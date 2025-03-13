@@ -193,12 +193,17 @@ async def process_csv():
             await f.write("id,en_name,ru_name,product_id,category_id\n")
 
     # Фильтрация товаров, которые уже переведены
-    df = df[~df['id'].isin(existing_ids)]
-    logger.info(f"После фильтрации, оставшиеся товары для перевода: {len(df)}")
+    df_new = df[~df['id'].isin(existing_ids)]
+    logger.info(f"После фильтрации, оставшиеся товары для перевода: {len(df_new)}")
 
-    # Разделяем на батчи
-    batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
-    logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
+    # Проверяем, что после фильтрации действительно остались новые товары
+    if len(df_new) == 0:
+        logger.info("Нет новых товаров для перевода.")
+        return OUTPUT_CSV
+
+    # Разделяем на батчи только для новых товаров
+    batches = [df_new.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_new), BATCH_SIZE)]
+    logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров для перевода.")
 
     await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))
 
