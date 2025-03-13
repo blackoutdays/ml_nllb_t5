@@ -161,50 +161,49 @@ async def process_csv():
     if not os.path.exists(INPUT_CSV):
         raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
-    # Загружаем переведенные ID
+    start_id = "7918904"  # Начинаем обработку с этого ID
+
+    # 1️⃣ Загружаем уже переведённые ID (но не удаляем старые данные!)
     existing_ids = set()
     if os.path.exists(OUTPUT_CSV):
         try:
             existing_ids = set(pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"])
             logger.info(f"Найдено уже переведённых товаров: {len(existing_ids)}")
         except Exception as e:
-            logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
+            logger.warning(f"Ошибка при чтении OUTPUT_CSV: {e}")
 
-    # Загружаем INPUT_CSV
+    # 2️⃣ Загружаем весь INPUT_CSV
     try:
         df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
         logger.info(f"CSV загружен, строк: {len(df)}")
     except Exception as e:
-        logger.error(f"Ошибка чтения CSV: {e}")
+        logger.error(f"Ошибка чтения INPUT_CSV: {e}")
         return None
 
-    # Проверяем наличие нужных столбцов
     if "id" not in df.columns or "names" not in df.columns:
         logger.error("CSV не содержит необходимые столбцы 'id' и 'names'.")
         return None
 
-    # Очищаем пустые строки
     df.dropna(subset=["id", "names"], inplace=True)
-    df["id"] = df["id"].astype(str)  # Приводим ID к строке
+    df["id"] = df["id"].astype(str)  # Убеждаемся, что ID - строки
 
-    # Фильтруем уже переведенные товары
-    df = df[~df["id"].isin(existing_ids)]
+    # 3️⃣ Оставляем только товары с ID >= 7918904 и которых нет в OUTPUT_CSV
+    df = df[(df["id"] >= start_id) & (~df["id"].isin(existing_ids))]
     logger.info(f"Оставшиеся товары для перевода после фильтрации: {len(df)}")
 
-    # Если переведенных нет — завершаем процесс
     if len(df) == 0:
-        logger.info("Все товары уже переведены. Завершаем работу.")
+        logger.info("Все нужные товары уже переведены. Завершаем работу.")
         return OUTPUT_CSV
 
-    # Обрабатываем JSON-данные в "names"
+    # 4️⃣ Приводим к нужному формату
     df.loc[:, "names"] = df["names"].apply(parse_json_safe)
     df.loc[:, "en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
 
-    # Создаем батчи только для новых товаров
+    # 5️⃣ Батчим только новые товары
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
     logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
-    # Переводим только новые товары
+    # 6️⃣ Переводим только новые товары и дописываем в OUTPUT_CSV
     await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))
 
     logger.info(f"Перевод завершён! Файл сохранён: {OUTPUT_CSV}")
