@@ -35,7 +35,7 @@ tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device)
 logger.info("Модель загружена!")
 
-BATCH_SIZE = 65
+BATCH_SIZE = 60
 
 def get_dynamic_threads():
     """Определяет количество потоков в зависимости от загрузки GPU"""
@@ -49,7 +49,7 @@ def get_dynamic_threads():
 
         if load > 0.8:
             return 10
-        return 24
+        return 20
     except Exception as e:
         logger.warning(f" Ошибка при определении загрузки GPU: {e}")
         return 10
