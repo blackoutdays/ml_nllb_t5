@@ -53,19 +53,18 @@ def get_dynamic_threads():
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
-            return 10  # Если GPU недоступен, возвращаем 10 потоков
+            return 10
 
         load = gpus[0].load
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
-        # Максимум 60 потоков, динамически от 10 до 60 в зависимости от загрузки GPU
         if load > 0.8:
-            return min(60, 20)  # если нагрузка на GPU больше 80%, ограничиваем до 20 потоков
-        return min(60, 50)  # в противном случае, но не больше 50 потоков
+            return min(60, 20)
+        return min(60, 50)
 
     except Exception as e:
         logger.warning(f"Ошибка при определении загрузки GPU: {e}")
-        return 10  # Если произошла ошибка, возвращаем 10 потоков по умолчанию
+        return 10
 
 NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)
@@ -157,10 +156,18 @@ async def process_batch(batch, existing_ids, semaphore):
     del batch
     gc.collect()
     torch.cuda.empty_cache()
-
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
         raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
+
+    # Загружаем переведённые товары
+    existing_ids = set()
+    if os.path.exists(OUTPUT_CSV):
+        try:
+            existing_ids = set(pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"])
+            logger.info(f"Найдено уже переведённых товаров: {len(existing_ids)}")
+        except Exception as e:
+            logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
 
     try:
         df = await asyncio.to_thread(pd.read_csv, INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
@@ -176,52 +183,28 @@ async def process_csv():
     df.dropna(subset=["id", "names"], inplace=True)
     logger.info(f"Очищенный CSV: {len(df)} строк после удаления пустых значений.")
 
-    df["names"] = df["names"].apply(parse_json_safe)
-    df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
-
-    # Загружаем ID уже переведенных товаров
-    # 1. Загружаем переведённые ID
-    existing_ids = set()
-    if os.path.exists(OUTPUT_CSV):
-        try:
-            existing_ids = set(pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"])
-            logger.info(f"Найдено уже переведённых товаров: {len(existing_ids)}")
-        except Exception as e:
-            logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
-
-    # 2. Загружаем весь INPUT_CSV и убираем переведённые товары
-    if not os.path.exists(INPUT_CSV):
-        raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
-
-    try:
-        df = pd.read_csv(INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
-        logger.info(f"CSV загружен, строк: {len(df)}")
-    except Exception as e:
-        logger.error(f"Ошибка чтения CSV: {e}")
-        exit(1)
-
-    # 3. Гарантируем, что id — строки
+    # Приводим ID к строкам, чтобы избежать проблем с типами данных
     df["id"] = df["id"].astype(str)
     existing_ids = set(map(str, existing_ids))
 
-    # 4. Фильтрация уже переведённых товаров
+    # Убираем уже переведённые товары
     df = df[~df["id"].isin(existing_ids)]
     logger.info(f"Оставшиеся товары для перевода после фильтрации: {len(df)}")
 
-    # 5. Если нет новых товаров – завершаем процесс
+    # Если нет товаров для перевода, выходим
     if len(df) == 0:
         logger.info("Все товары уже переведены. Завершаем работу.")
-        exit(0)
+        return OUTPUT_CSV
 
-    # 6. Приведение данных к нужному формату
+    # Подготавливаем тексты для перевода
     df["names"] = df["names"].apply(parse_json_safe)
     df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
 
-    # 7. Батчим только новые товары
+    # Батчим только новые товары
     batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
     logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
 
-    # 8. Запускаем перевод только новых товаров
+    # Переводим только новые товары
     await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))
 
     logger.info(f"Перевод завершён! Файл сохранён: {OUTPUT_CSV}")
