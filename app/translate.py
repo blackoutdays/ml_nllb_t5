@@ -1,10 +1,10 @@
 import os
+import gc
 import time
 import torch
 import json
 import logging
 import aiofiles
-import gc
 import asyncio
 import pandas as pd
 from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
@@ -38,7 +38,6 @@ logger.info("Модель загружена!")
 
 BATCH_SIZE = 60
 
-
 def get_dynamic_threads():
     """Определяет количество потоков в зависимости от загрузки GPU"""
     try:
@@ -54,16 +53,13 @@ def get_dynamic_threads():
         logger.warning(f" Ошибка при определении загрузки GPU: {e}")
         return 10
 
-
 NUM_THREADS = get_dynamic_threads()
-semaphore = asyncio.Semaphore(NUM_THREADS)  # Контролируем количество активных задач
-
+semaphore = asyncio.Semaphore(NUM_THREADS)
 
 async def write_to_csv(row):
     """Асинхронно записывает одну строку в CSV."""
     async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
         await f.write(",".join(map(str, row)) + "\n")
-
 
 def parse_json_safe(x):
     """Безопасный разбор JSON."""
@@ -72,7 +68,6 @@ def parse_json_safe(x):
     except json.JSONDecodeError as e:
         logger.error(f"Ошибка JSON: {e} в строке: {x}")
         return {}
-
 
 def translate_text(text):
     """Переводит один текст (работает в отдельном потоке) и логирует результат."""
@@ -100,7 +95,6 @@ def translate_text(text):
         logger.error(f"Ошибка при переводе: {e}")
         return ""
 
-
 async def translate_batch(batch):
     """Обрабатывает перевод батча товаров."""
     logger.info(f"Переводим {len(batch)} товаров...")
@@ -114,18 +108,19 @@ async def translate_batch(batch):
 
     return translations
 
-
 async def process_batch(batch):
-    """Переводит один батч товаров и записывает результаты в CSV."""
     async with semaphore:
         start_time = time.time()
         translations = await translate_batch(batch)
 
         rows_to_write = []
         for i, (_, row) in enumerate(batch.iterrows()):
+            logger.info(f"Перевожу ID {row['id']}: \"{row['en']}\" (англ.)")
+
             translated_text = translations[i]
 
             logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
+
             csv_row = [row["id"], row["en"], translated_text, row["product_id"], row["category_id"]]
 
             logger.info(f"Записываю в CSV: {csv_row}")
@@ -141,7 +136,6 @@ async def process_batch(batch):
 
         del batch
         gc.collect()
-
 
 async def process_csv():
     """Обрабатывает CSV, распределяя батчи на 10-20 потоков в зависимости от загрузки GPU."""
