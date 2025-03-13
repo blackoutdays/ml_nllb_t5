@@ -65,8 +65,18 @@ NUM_THREADS = get_dynamic_threads()
 semaphore = asyncio.Semaphore(NUM_THREADS)
 
 async def write_to_csv(rows):
-    async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
-        await f.writelines([",".join(map(str, row)) + "\n" for row in rows])
+    if not rows:
+        logger.warning(" Пустой список строк передан в write_to_csv!")
+        return
+
+    logger.info(f"Записываем {len(rows)} строк в CSV...")
+
+    try:
+        async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
+            await f.writelines([",".join(map(str, row)) + "\n" for row in rows])
+        logger.info(f" Успешно записано {len(rows)} строк в CSV.")
+    except Exception as e:
+        logger.error(f" Ошибка при записи в CSV: {e}")
 
 def parse_json_safe(x):
     try:
@@ -117,19 +127,26 @@ async def process_batch(batch, existing_ids):
                 continue
 
             translated_text = translations[i]
-            logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
+            if not translated_text:
+                logger.warning(f" Перевод пуст для ID {row['id']}: {row['en']}")
+                continue  # Если перевод пустой, пропускаем запись в файл
+
+            logger.info(f" Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
             rows.append([row["id"], row["en"], translated_text, row["product_id"], row["category_id"]])
             existing_ids.add(str(row["id"]))
 
+        if not rows:
+            logger.warning(" Нет строк для записи в CSV в этом батче!")
+
         if rows:
+            logger.info(f" Отправляем {len(rows)} строк в write_to_csv...")
             await write_to_csv(rows)
 
-        logger.info(f"Обработано {len(batch)} строк за {time.time() - start_time:.2f} сек.")
+        logger.info(f" Обработано {len(batch)} строк за {time.time() - start_time:.2f} сек.")
 
         del batch
         gc.collect()
         torch.cuda.empty_cache()
-
 
 async def process_csv():
     if not os.path.exists(INPUT_CSV):
