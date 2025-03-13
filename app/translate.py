@@ -146,7 +146,7 @@ async def process_batch(batch, existing_ids, semaphore):
             logger.info(f"Переведено ID {row['id']}: \"{row['en']}\" → \"{translated_text}\"")
             csv_row = [row["id"], row["en"], translated_text, row["product_id"], row["category_id"]]
             rows_to_write.append(csv_row)
-            existing_ids.add(str(row["id"]))  # Обновляем список переведенных товаров
+            existing_ids.add(str(row["id"]))
 
         if rows_to_write:
             await write_to_csv(rows_to_write)
@@ -180,32 +180,49 @@ async def process_csv():
     df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
 
     # Загружаем ID уже переведенных товаров
+    # 1. Загружаем переведённые ID
     existing_ids = set()
     if os.path.exists(OUTPUT_CSV):
         try:
             existing_ids = set(pd.read_csv(OUTPUT_CSV, usecols=["id"], dtype=str)["id"])
-            logger.info(f"Найдено уже переведенных товаров: {len(existing_ids)}")
+            logger.info(f"Найдено уже переведённых товаров: {len(existing_ids)}")
         except Exception as e:
             logger.warning(f"Ошибка при чтении файла {OUTPUT_CSV}: {e}")
 
-    if not os.path.exists(OUTPUT_CSV):
-        async with aiofiles.open(OUTPUT_CSV, mode="w", encoding="utf-8") as f:
-            await f.write("id,en_name,ru_name,product_id,category_id\n")
+    # 2. Загружаем весь INPUT_CSV и убираем переведённые товары
+    if not os.path.exists(INPUT_CSV):
+        raise FileNotFoundError(f"Файл не найден: {INPUT_CSV}")
 
-    # Фильтрация товаров, которые уже переведены
-    df_new = df[~df['id'].isin(existing_ids)]
-    logger.info(f"После фильтрации, оставшиеся товары для перевода: {len(df_new)}")
+    try:
+        df = pd.read_csv(INPUT_CSV, delimiter=";", quotechar='"', on_bad_lines="skip", dtype=str)
+        logger.info(f"CSV загружен, строк: {len(df)}")
+    except Exception as e:
+        logger.error(f"Ошибка чтения CSV: {e}")
+        exit(1)
 
-    # Проверяем, что после фильтрации действительно остались новые товары
-    if len(df_new) == 0:
-        logger.info("Нет новых товаров для перевода.")
-        return OUTPUT_CSV
+    # 3. Гарантируем, что id — строки
+    df["id"] = df["id"].astype(str)
+    existing_ids = set(map(str, existing_ids))
 
-    # Разделяем на батчи только для новых товаров
-    batches = [df_new.iloc[i:i + BATCH_SIZE] for i in range(0, len(df_new), BATCH_SIZE)]
-    logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров для перевода.")
+    # 4. Фильтрация уже переведённых товаров
+    df = df[~df["id"].isin(existing_ids)]
+    logger.info(f"Оставшиеся товары для перевода после фильтрации: {len(df)}")
 
+    # 5. Если нет новых товаров – завершаем процесс
+    if len(df) == 0:
+        logger.info("Все товары уже переведены. Завершаем работу.")
+        exit(0)
+
+    # 6. Приведение данных к нужному формату
+    df["names"] = df["names"].apply(parse_json_safe)
+    df["en"] = df["names"].apply(lambda x: x.get("en", "") if isinstance(x, dict) else "")
+
+    # 7. Батчим только новые товары
+    batches = [df.iloc[i:i + BATCH_SIZE] for i in range(0, len(df), BATCH_SIZE)]
+    logger.info(f"Всего {len(batches)} батчей по {BATCH_SIZE} товаров.")
+
+    # 8. Запускаем перевод только новых товаров
     await asyncio.gather(*(process_batch(batch, existing_ids, semaphore) for batch in batches))
 
-    logger.info(f"Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
+    logger.info(f"Перевод завершён! Файл сохранён: {OUTPUT_CSV}")
     return OUTPUT_CSV
