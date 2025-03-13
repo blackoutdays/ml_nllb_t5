@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger()
 
 INPUT_CSV = "/home/aruzhan/products_202503121705.csv"
-OUTPUT_CSV = "/home/aruzhan/translated_products.csv"
+OUTPUT_CSV = "/home/aruzhan/translated_products_test.csv"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
