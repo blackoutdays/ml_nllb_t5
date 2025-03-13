@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger()
 
 INPUT_CSV = "/home/aruzhan/products_202503121705.csv"
-OUTPUT_CSV = "/home/aruzhan/translated_products_test.csv"
+OUTPUT_CSV = "/home/aruzhan/translated_products_test1.csv"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -34,56 +34,32 @@ tokenizer = T5Tokenizer.from_pretrained(MODEL_PATH)
 model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH).to(device).half()
 logger.info("Модель загружена!")
 
-def adjust_batch_size():
-    gpus = GPUtil.getGPUs()
-    if not gpus:
-        return 90
-
-    load = gpus[0].load
-    logger.info(f"Загруженность GPU: {load * 100:.2f}%")
-
-    if load > 0.9:
-        return 32
-    return 90
-
-BATCH_SIZE = adjust_batch_size()
+BATCH_SIZE = 90
 
 def get_dynamic_threads():
+    """Определяет количество потоков в зависимости от загрузки GPU"""
     try:
         gpus = GPUtil.getGPUs()
         if not gpus:
-            return 20
+            return 15
 
         load = gpus[0].load  # Загруженность GPU (0.0 - 1.0)
         logger.info(f"Загруженность GPU: {load * 100:.2f}%")
 
         if load > 0.8:
-            return 20
-        return 35
+            return 15
+        return 30
     except Exception as e:
         logger.warning(f" Ошибка при определении загрузки GPU: {e}")
-        return 20
+        return 15
 
 NUM_THREADS = get_dynamic_threads()
-semaphore = asyncio.Semaphore(NUM_THREADS)
+semaphore = asyncio.Semaphore(NUM_THREADS)  # Контролируем количество активных задач
 
-async def write_to_csv(rows):
-    if not rows:
-        logger.warning(" Пустой список строк передан в write_to_csv!")
-        return
-
-    logger.info(f" Записываем {len(rows)} строк в CSV...")
-
-    try:
-        async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
-            for row in rows:
-                line = ",".join(map(str, row)) + "\n"
-                await f.write(line)
-
-        logger.info(f" Успешно записано {len(rows)} строк в CSV.")
-
-    except Exception as e:
-        logger.error(f" Ошибка при записи в CSV: {e}")
+async def write_to_csv(row):
+    """Асинхронно записывает одну строку в CSV."""
+    async with aiofiles.open(OUTPUT_CSV, mode="a", encoding="utf-8") as f:
+        await f.write(",".join(map(str, row)) + "\n")
 
 def parse_json_safe(x):
     """Безопасный разбор JSON."""
@@ -176,3 +152,6 @@ async def process_csv():
 
     logger.info(f" Перевод завершен! Файл сохранен: {OUTPUT_CSV}")
     return OUTPUT_CSV
+
+
+
