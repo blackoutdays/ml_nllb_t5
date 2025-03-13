@@ -108,6 +108,7 @@ async def translate_batch(batch, semaphore):
     loop = asyncio.get_running_loop()
     tasks = []
 
+    # Ограничиваем количество параллельных задач через semaphore
     for _, row in batch.iterrows():
         tasks.append(loop.create_task(translate_text_with_semaphore(row["en"], semaphore)))
 
@@ -119,7 +120,7 @@ async def translate_text_with_semaphore(text, semaphore):
     async with semaphore:
         return await asyncio.to_thread(translate_text, text)
 
-async def process_batch(batch, existing_ids, semaphore):  # добавляем semaphore в аргументы функции
+async def process_batch(batch, existing_ids, semaphore):  # передаем semaphore в функцию
     start_time = time.time()
 
     rows_to_translate = []
@@ -134,7 +135,7 @@ async def process_batch(batch, existing_ids, semaphore):  # добавляем s
 
     if rows_to_translate:
         try:
-            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)
+            translations = await translate_batch(pd.DataFrame(rows_to_translate), semaphore)  # передаем semaphore
         except Exception as e:
             logger.error(f"Ошибка при переводе: {e}")
             return
